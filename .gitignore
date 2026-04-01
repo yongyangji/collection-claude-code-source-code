@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+out/
+build/
+
+# VSCode extension package
+*.vsix
+
+# IDE (only at root level)
+/.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test
+.vscode-test/
+
+# Environment
+.env
+.env.local

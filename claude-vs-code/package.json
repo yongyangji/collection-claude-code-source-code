@@ -1,0 +1,167 @@
+{
+  "name": "claude-code-vscode",
+  "publisher": "local",
+  "displayName": "Claude Code for VSCode",
+  "description": "AI coding assistant powered by your own API key",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudeCode.openChat",
+        "title": "Claude Code: Open Chat"
+      },
+      {
+        "command": "claudeCode.askAboutSelection",
+        "title": "Claude Code: Ask About Selection"
+      },
+      {
+        "command": "claudeCode.setApiKey",
+        "title": "Claude Code: Set API Key"
+      },
+      {
+        "command": "claudeCode.clearHistory",
+        "title": "Claude Code: Clear Chat History"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claude-code",
+          "title": "Claude Code",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "claude-code": [
+        {
+          "type": "webview",
+          "id": "claudeCode.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Claude Code",
+      "properties": {
+        "claudeCode.apiProvider": {
+          "type": "string",
+          "default": "anthropic",
+          "enum": [
+            "anthropic",
+            "openai",
+            "openai-compatible",
+            "bedrock",
+            "vertex"
+          ],
+          "enumDescriptions": [
+            "Anthropic Claude API (api.anthropic.com)",
+            "OpenAI API (api.openai.com)",
+            "OpenAI-compatible API (custom base URL)",
+            "AWS Bedrock",
+            "Google Cloud Vertex AI"
+          ],
+          "description": "API provider to use"
+        },
+        "claudeCode.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key (for security, use 'Set API Key' command to store in SecretStorage)"
+        },
+        "claudeCode.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Custom API base URL (required for OpenAI-compatible providers, e.g., https://api.deepseek.com)"
+        },
+        "claudeCode.model": {
+          "type": "string",
+          "default": "claude-sonnet-4-20250514",
+          "description": "Model name to use (e.g., claude-sonnet-4-20250514, gpt-4o, deepseek-chat)"
+        },
+        "claudeCode.maxTokens": {
+          "type": "number",
+          "default": 16384,
+          "description": "Max output tokens per request"
+        },
+        "claudeCode.thinkingEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable extended thinking (Anthropic only)"
+        },
+        "claudeCode.thinkingBudget": {
+          "type": "number",
+          "default": 10000,
+          "description": "Max thinking tokens (Anthropic only)"
+        },
+        "claudeCode.temperature": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Sampling temperature (0 = deterministic)"
+        },
+        "claudeCode.timeout": {
+          "type": "number",
+          "default": 120000,
+          "description": "Request timeout in milliseconds"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "claudeCode.openChat",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a"
+      },
+      {
+        "command": "claudeCode.askAboutSelection",
+        "key": "ctrl+shift+s",
+        "mac": "cmd+shift+s",
+        "when": "editorTextFocus"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "claudeCode.askAboutSelection",
+          "group": "claudeCode",
+          "when": "editorTextFocus && editorHasSelection"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "esbuild src/extension.ts --bundle --outdir=dist --external:vscode --format=cjs --platform=node --target=node18",
+    "watch": "npm run build -- --watch",
+    "test": "node ./test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.15.0",
+    "esbuild": "^0.27.4",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "axios": "^1.7.0",
+    "lodash-es": "^4.17.21",
+    "openai": "^4.70.0",
+    "zod": "^3.24.0"
+  },
+  "overrides": {
+    "undici": "5.28.4"
+  }
+}

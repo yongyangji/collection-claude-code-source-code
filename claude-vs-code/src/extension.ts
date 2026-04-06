@@ -65,8 +65,8 @@ export function activate(context: vscode.ExtensionContext) {
 
   // 清除历史命令
   context.subscriptions.push(
-    vscode.commands.registerCommand('claudeCode.clearHistory', () => {
-      chatProvider.clearHistory();
+    vscode.commands.registerCommand('claudeCode.clearHistory', async () => {
+      await chatProvider.clearHistory();
       vscode.window.showInformationMessage('Chat history cleared.');
     })
   );

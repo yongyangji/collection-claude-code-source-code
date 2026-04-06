@@ -8,6 +8,7 @@ import type { ToolResult } from '../tools/Tool';
 import { findToolByName, getToolDefinitionsForLLM } from '../tools/registry';
 import { buildSystemPrompt } from './prompts';
 import { getModelName, getMaxTokens, getThinkingConfig, getTemperature } from '../api/clientFactory';
+import { getHistoryManager, type ChatMessage } from '../utils/historyManager';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -29,6 +30,7 @@ export class QueryEngine {
   private messages: Message[] = [];
   private totalUsage = { input_tokens: 0, output_tokens: 0 };
   private abortController?: AbortController;
+  private currentUsage = { input_tokens: 0, output_tokens: 0 }; // 当前请求的使用量
 
   constructor(
     private client: LLMClient,
@@ -39,10 +41,23 @@ export class QueryEngine {
   ) {}
 
   /**
+   * 从历史消息加载
+   */
+  loadMessages(messages: Message[]) {
+    this.messages = [...messages];
+  }
+
+  /**
    * 运行查询循环
    */
   async *run(userMessage: string): AsyncGenerator<QueryEvent> {
     this.abortController = new AbortController();
+    this.currentUsage = { input_tokens: 0, output_tokens: 0 }; // 重置当前请求使用量
+    
+    // 保存用户消息到历史
+    const historyManager = getHistoryManager();
+    await historyManager.addMessage('user', userMessage);
+    
     this.messages.push({ role: 'user', content: userMessage });
 
     const tools = getToolDefinitionsForLLM();
@@ -77,41 +92,75 @@ export class QueryEngine {
       let toolCalls: Array<{ id: string; name: string; input: unknown }> = [];
 
       try {
+        // 按 index 追踪正在流式输出的内容块
+        const blocksByIndex = new Map<number, {
+          type: string; id?: string; name?: string;
+          text?: string; thinking?: string;
+          partialJson?: string; input?: unknown;
+        }>();
+
         for await (const event of this.client.createStream(params)) {
           if (this.abortController.signal.aborted) {
             yield { type: 'error', error: 'Request cancelled by user' };
             return;
           }
 
-          // 处理流事件
-          if (event.type === 'content_block_delta') {
-            if (event.delta?.type === 'thinking' || event.delta?.thinking) {
-              yield { type: 'thinking', thinking: event.delta.thinking };
-            } else if (event.delta?.type === 'text' || event.delta?.text) {
-              const text = event.delta.text || '';
-              currentText += text;
-              yield { type: 'text', text };
+          if (event.type === 'content_block_start' && event.content_block !== undefined) {
+            // 记录块的初始信息（type/id/name）
+            blocksByIndex.set(event.index!, {
+              type: event.content_block.type,
+              id: event.content_block.id,
+              name: event.content_block.name,
+            });
+          } else if (event.type === 'content_block_delta') {
+            const block = blocksByIndex.get(event.index!);
+            if (!block) { continue; }
+            const delta = event.delta as any;
+
+            if (delta.type === 'text_delta' || (delta.text !== undefined && block.type === 'text')) {
+              // Anthropic: text_delta; OpenAI: delta.text
+              const text = (delta.text ?? '') as string;
+              if (text) {
+                block.text = (block.text || '') + text;
+                currentText += text;
+                yield { type: 'text', text };
+              }
+            } else if (delta.type === 'thinking_delta' || (delta.thinking !== undefined && block.type === 'thinking')) {
+              const thinking = (delta.thinking ?? '') as string;
+              if (thinking) {
+                block.thinking = (block.thinking || '') + thinking;
+                yield { type: 'thinking', thinking };
+              }
+            } else if (delta.type === 'input_json_delta') {
+              // Anthropic: tool input 为增量 JSON 字符串
+              block.partialJson = (block.partialJson || '') + ((delta.partial_json ?? '') as string);
+            } else if (delta.type === 'tool_use' && delta.input !== undefined) {
+              // OpenAI-compatible: tool input 已解析为对象
+              block.input = delta.input;
             }
-          } else if (event.type === 'content_block_start' && event.content_block) {
-            if (event.content_block.type === 'tool_use') {
-              // 工具调用开始
-            }
-          } else if (event.type === 'content_block_stop' && event.content_block) {
-            contentBlocks.push(event.content_block);
-            if (event.content_block.type === 'tool_use') {
-              toolCalls.push({
-                id: event.content_block.id!,
-                name: event.content_block.name!,
-                input: event.content_block.input,
-              });
-              yield {
-                type: 'tool_use',
-                name: event.content_block.name,
-                input: event.content_block.input,
-              };
+          } else if (event.type === 'content_block_stop') {
+            // 块完成，根据类型写入 contentBlocks
+            const block = blocksByIndex.get(event.index!);
+            if (!block) { continue; }
+
+            if (block.type === 'tool_use') {
+              let input: unknown = block.input;
+              if (input === undefined && block.partialJson) {
+                try { input = JSON.parse(block.partialJson); } catch { input = {}; }
+              }
+              if (input === undefined) { input = {}; }
+              contentBlocks.push({ type: 'tool_use', id: block.id, name: block.name, input });
+              toolCalls.push({ id: block.id!, name: block.name!, input });
+              yield { type: 'tool_use', name: block.name, input };
+            } else if (block.type === 'text' && block.text) {
+              contentBlocks.push({ type: 'text', text: block.text });
+            } else if (block.type === 'thinking' && block.thinking) {
+              contentBlocks.push({ type: 'thinking', thinking: block.thinking });
             }
           } else if (event.type === 'message_delta' || event.type === 'message_stop') {
             if (event.usage) {
+              this.currentUsage.input_tokens += event.usage.input_tokens;
+              this.currentUsage.output_tokens += event.usage.output_tokens;
               this.totalUsage.input_tokens += event.usage.input_tokens;
               this.totalUsage.output_tokens += event.usage.output_tokens;
             }
@@ -123,18 +172,18 @@ export class QueryEngine {
         return;
       }
 
-      // 保存 assistant 消息
-      if (currentText && toolCalls.length === 0) {
-        contentBlocks.push({ type: 'text', text: currentText });
-      }
+      const assistantContent: string | LLMContentBlock[] = contentBlocks.length > 0 ? contentBlocks : currentText;
       this.messages.push({
         role: 'assistant',
-        content: contentBlocks.length > 0 ? contentBlocks : currentText,
+        content: assistantContent,
       });
 
       // 如果没有工具调用，结束
       if (toolCalls.length === 0) {
-        yield { type: 'done', usage: this.totalUsage };
+        // 保存助手消息到历史
+        await historyManager.addMessage('assistant', assistantContent, this.currentUsage);
+        
+        yield { type: 'done', usage: this.currentUsage };
         return;
       }
 
